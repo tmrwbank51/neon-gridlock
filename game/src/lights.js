@@ -15,6 +15,7 @@ function makeIntersectionLights(id, auto) {
     auto: !!auto,
     autoTimer: 0,
     autoPhase: 'ns', // 'ns' = N+S green, 'ew' = E+W green
+    autoPending: null, // axis waiting for the old axis to clear
     roundabout: false,
     approaches: { N: makeApproachLight(), E: makeApproachLight(), S: makeApproachLight(), W: makeApproachLight() }
   };
@@ -68,15 +69,26 @@ function updateLights(lights, dt, mods) {
   }
   if (lights.auto && !lights.roundabout) {
     lights.autoTimer += dt;
-    const phaseLen = 5.0;
-    if (lights.autoTimer >= phaseLen) {
-      lights.autoTimer = 0;
+    if (lights.autoPending) {
+      // Wait for the old axis to reach red before greening the new one:
+      // the amber phase is the clearance interval, never skipped.
+      const oldAxis = lights.autoPending === 'ns' ? ['E', 'W'] : ['N', 'S'];
+      const clear = oldAxis.every(function (ap) { return lights.approaches[ap].state === 'red'; });
+      if (clear) {
+        const newAxis = lights.autoPending === 'ns' ? ['N', 'S'] : ['E', 'W'];
+        newAxis.forEach(function (ap) { lightSet(lights, ap, 'green'); });
+        lights.autoPending = null;
+        lights.autoTimer = 0;
+      }
+    } else if (lights.autoTimer >= 5.0) {
+      const greenAxis = lights.autoPhase === 'ns' ? ['N', 'S'] : ['E', 'W'];
+      greenAxis.forEach(function (ap) {
+        const a = lights.approaches[ap];
+        if (a.state === 'green') { a.state = 'amber'; a.timer = 0; }
+      });
       lights.autoPhase = lights.autoPhase === 'ns' ? 'ew' : 'ns';
-      const nsGreen = lights.autoPhase === 'ns';
-      lightSet(lights, 'N', nsGreen ? 'green' : 'red');
-      lightSet(lights, 'S', nsGreen ? 'green' : 'red');
-      lightSet(lights, 'E', nsGreen ? 'red' : 'green');
-      lightSet(lights, 'W', nsGreen ? 'red' : 'green');
+      lights.autoPending = lights.autoPhase;
+      lights.autoTimer = 0;
     }
   }
 }

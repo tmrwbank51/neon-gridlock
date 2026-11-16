@@ -43,7 +43,7 @@ function makePedestrian(node, rng, bridgeNodes) {
     state: 'toWait',
     crossing: false,
     jaywalking: false,
-    patience: rng.range(9, 14),
+    patience: rng.range(12, 18),
     waitTime: 0,
     speed: rng.range(30, 40),
     bob: rng.range(0, Math.PI * 2),
@@ -81,14 +81,26 @@ function updatePedestrian(ped, dt, world) {
         ped.state = 'crossing';
         ped.crossing = true;
       } else if (ped.waitTime > ped.patience) {
-        ped.state = 'crossing';
-        ped.crossing = true;
-        ped.jaywalking = true;
+        // A jaywalker still looks both ways: only step out when no car
+        // is close enough to be a danger. Otherwise keep waiting.
+        let danger = false;
+        for (let i = 0; i < world.cars.length; i++) {
+          const car = world.cars[i];
+          if (car.state !== 'driving') continue;
+          const dx = car.x - ped.x;
+          const dy = car.y - ped.y;
+          if (dx * dx + dy * dy < 85 * 85) { danger = true; break; }
+        }
+        if (!danger) {
+          ped.state = 'crossing';
+          ped.crossing = true;
+          ped.jaywalking = true;
+        }
       }
       break;
     }
     case 'crossing': {
-      const speed = ped.jaywalking ? ped.speed * 1.6 : ped.speed;
+      const speed = ped.jaywalking ? ped.speed * 1.4 : ped.speed;
       if (pedStepToward(ped, ped.target.x, ped.target.y, dt, speed)) {
         ped.crossing = false;
         ped.crossed = true;

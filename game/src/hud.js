@@ -200,7 +200,12 @@ function drawStartScreen(g, world) {
   g.fillStyle = 'rgba(4,5,14,0.52)';
   g.fillRect(0, 0, W, NG_CONFIG.canvasHeight);
   // Skyline silhouette strip behind the title.
-  g.fillStyle = 'rgba(10,10,24,0.85)';
+  const horizon = g.createLinearGradient(0, 40, 0, 230);
+  horizon.addColorStop(0, 'rgba(55,226,255,0.14)');
+  horizon.addColorStop(1, 'rgba(55,226,255,0)');
+  g.fillStyle = horizon;
+  g.fillRect(0, 40, W, 190);
+  g.fillStyle = 'rgba(16,16,34,0.92)';
   g.beginPath();
   g.moveTo(0, 210);
   const tops = [150, 120, 165, 105, 150, 130, 170, 115, 155, 140, 168, 118, 152, 132, 160];
@@ -266,7 +271,7 @@ function drawUpgradeScreen(g, world) {
   const W = NG_CONFIG.canvasWidth;
   g.fillStyle = 'rgba(4,5,14,0.66)';
   g.fillRect(0, 0, W, NG_CONFIG.canvasHeight);
-  neonTitle(g, 'WAVE ' + world.director.waveIndex + ' CLEAR', W / 2, 128, 40, '#7dff6a');
+  neonTitle(g, 'WAVE ' + (world.director.waveIndex + 1) + ' CLEAR', W / 2, 128, 40, '#7dff6a');
   g.font = '17px ' + NG_FONT;
   g.fillStyle = '#d8d8ea';
   g.textAlign = 'center';

@@ -18,7 +18,7 @@ function makeVehicle(type, path, rng, mods) {
     x: 0, y: 0, angle: 0,
     state: 'driving',
     wreckTimer: 0,
-    reckless: (type === 'car' || type === 'taxi') && rng.chance(0.09),
+    reckless: (type === 'car' || type === 'taxi') && rng.chance(0.05),
     redDecisions: {},
     emergency: !!arch.emergency,
     patience: 0,
@@ -34,7 +34,7 @@ function makeVehicle(type, path, rng, mods) {
     exited: false
   };
   if (v.emergency) {
-    v.patienceMax = 30 * (mods.siren ? 1.6 : 1);
+    v.patienceMax = 42 * (mods.siren ? 1.6 : 1);
     v.patience = v.patienceMax;
   }
   const p = pathPointAt(path, 0);
@@ -110,9 +110,23 @@ function updateVehicle(car, dt, world) {
       const state = lightStateAt(lights, st.approach);
       const key = st.node + ':' + st.approach;
       if (car.redDecisions[key] === undefined) {
-        car.redDecisions[key] = car.reckless && world.rng.chance(0.35);
+        car.redDecisions[key] = car.reckless && world.rng.chance(0.25);
       }
-      const willRun = car.redDecisions[key];
+      // A reckless driver only runs the red when the whole area is clear
+      // and nothing is about to arrive: distance plus time-to-box.
+      let willRun = car.redDecisions[key];
+      if (willRun) {
+        const node = world.city.nodes[st.node];
+        for (let i = 0; i < world.cars.length; i++) {
+          const other = world.cars[i];
+          if (other === car || other.state !== 'driving') continue;
+          const dx = other.x - node.x;
+          const dy = other.y - node.y;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d < 90) { willRun = false; break; }
+          if (d < 140 && other.speed > 8 && d / other.speed < 1.5) { willRun = false; break; }
+        }
+      }
       if (state === 'red' && !willRun) {
         mustStopAt = st.s - NG_CONFIG.stopGap;
       } else if (state === 'red' && willRun) {
@@ -122,6 +136,38 @@ function updateVehicle(car, dt, world) {
         // Stop if comfortably possible, else clear the box.
         const brakeDist = (car.speed * car.speed) / (2 * decel) + 6;
         if (dist > brakeDist + 4 && !willRun) mustStopAt = st.s - NG_CONFIG.stopGap;
+      }
+    }
+  }
+
+  // --- constraint 1b: a left turn yields to oncoming traffic, judged by
+  // TIME to the box, not distance: a fast car 95px out arrives together
+  // with the turning car. A stopped car sitting inside the box also
+  // blocks (a stopped car at its stop line does not, avoiding deadlock).
+  if (st && turnAtNextNode(car, world.city) === -1) {
+    const distToStop = st.s - car.s;
+    if (distToStop < 90 && distToStop > 2) {
+      const node = world.city.nodes[st.node];
+      for (let i = 0; i < world.cars.length; i++) {
+        const other = world.cars[i];
+        if (other === car || other.state !== 'driving') continue;
+        const dx = other.x - node.x;
+        const dy = other.y - node.y;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d > 140) continue;
+        let ad = Math.abs(other.angle - car.angle) % (Math.PI * 2);
+        if (ad > Math.PI) ad = Math.PI * 2 - ad;
+        if (ad <= 2.4) continue;
+        let blocked = false;
+        if (other.speed < 8) {
+          blocked = d <= 40;
+        } else if (d / other.speed < 2.0) {
+          blocked = true;
+        }
+        if (blocked) {
+          mustStopAt = Math.min(mustStopAt, st.s - NG_CONFIG.stopGap);
+          break;
+        }
       }
     }
   }
@@ -144,22 +190,31 @@ function updateVehicle(car, dt, world) {
     }
   }
 
-  // --- constraint 3: the car ahead (same lane, same direction)
+  // --- constraint 3: the car ahead, measured ALONG MY OWN PATH.
+  // A straight-line projection fails on turns (a car around the corner
+  // is invisible until overlap), so leaders are found by proximity to
+  // the path points ahead of this car. Crossing traffic on the path
+  // ahead also blocks: nobody enters an occupied box.
   let leader = null;
   let leaderGap = Infinity;
-  const hx = Math.cos(car.angle);
-  const hy = Math.sin(car.angle);
-  for (let i = 0; i < world.cars.length; i++) {
-    const other = world.cars[i];
-    if (other === car) continue;
-    const dx = other.x - car.x;
-    const dy = other.y - car.y;
-    const ahead = dx * hx + dy * hy;
-    if (ahead <= 0) continue;
-    const lateral = Math.abs(dx * hy - dy * hx);
-    if (lateral > 13) continue;
-    const gap = ahead - other.arch.len / 2 - car.arch.len / 2;
-    if (gap < leaderGap) { leaderGap = gap; leader = other; }
+  {
+    const pts = car.path.pts;
+    const cum = car.path.cum;
+    const startIdx = pathIndexAt(car.path, car.s);
+    const horizon = car.s + 100;
+    for (let i = 0; i < world.cars.length; i++) {
+      const other = world.cars[i];
+      if (other === car) continue;
+      for (let k = startIdx; k < pts.length && cum[k] < horizon; k += 3) {
+        const dx = other.x - pts[k].x;
+        const dy = other.y - pts[k].y;
+        if (dx * dx + dy * dy < 17 * 17) {
+          const gap = (cum[k] - car.s) - other.arch.len / 2 - car.arch.len / 2;
+          if (gap < leaderGap) { leaderGap = gap; leader = other; }
+          break;
+        }
+      }
+    }
   }
   if (leader && leaderGap < 46) {
     if (leaderGap <= 11) {
@@ -168,17 +223,56 @@ function updateVehicle(car, dt, world) {
       limitSpeed = Math.min(limitSpeed, leader.speed * Math.min(1, leaderGap / 30) + 12);
     }
   }
+  // Short-range safety net: anything right in front of the bumper.
+  {
+    const hx2 = Math.cos(car.angle);
+    const hy2 = Math.sin(car.angle);
+    for (let i = 0; i < world.cars.length; i++) {
+      const other = world.cars[i];
+      if (other === car) continue;
+      const dx = other.x - car.x;
+      const dy = other.y - car.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 > 26 * 26) continue;
+      const ahead = dx * hx2 + dy * hy2;
+      if (ahead > 0) { limitSpeed = 0; break; }
+    }
+  }
 
-  // --- constraint 4: pedestrians in a crosswalk ahead
+  // --- constraint 4: pedestrians in a crosswalk ahead, measured along
+  // the path (a turn hides a pedestrian from a straight-line check the
+  // same way it hid the car ahead).
+  {
+    const pts = car.path.pts;
+    const cum = car.path.cum;
+    const startIdx = pathIndexAt(car.path, car.s);
+    const horizon = car.s + 70;
+    for (let i = 0; i < world.peds.length; i++) {
+      const ped = world.peds[i];
+      if (!ped.crossing) continue;
+      for (let k = startIdx; k < pts.length && cum[k] < horizon; k += 3) {
+        const dx = ped.x - pts[k].x;
+        const dy = ped.y - pts[k].y;
+        if (dx * dx + dy * dy < 16 * 16) {
+          const gap = cum[k] - car.s;
+          if (gap < 52) limitSpeed = Math.min(limitSpeed, gap < 26 ? 0 : 14);
+          break;
+        }
+      }
+    }
+  }
+  // Straight-line fallback for pedestrians right beside the bumper.
+  const hx = Math.cos(car.angle);
+  const hy = Math.sin(car.angle);
   for (let i = 0; i < world.peds.length; i++) {
     const ped = world.peds[i];
     if (!ped.crossing) continue;
     const dx = ped.x - car.x;
     const dy = ped.y - car.y;
     const ahead = dx * hx + dy * hy;
-    if (ahead < 0 || ahead > 52) continue;
+    if (ahead < 0 || ahead > 60) continue;
     const lateral = Math.abs(dx * hy - dy * hx);
-    if (lateral > 14) continue;
+    if (lateral > 18) continue;
     if (ahead <= 26) { limitSpeed = 0; }
     else { limitSpeed = Math.min(limitSpeed, 18); }
     break;

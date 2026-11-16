@@ -13,35 +13,39 @@ var NG_OPPOSITE = { N: 'S', E: 'W', S: 'N', W: 'E' };
 
 function buildCity(rng) {
   const hud = NG_CONFIG.hudHeight;
-  // Intersections in activation order: centre-top first, then outwards.
+  // Intersections in activation order. The order matters: every prefix
+  // of it must be a connected subgraph with at least two edge portals,
+  // or no route (and no traffic) exists in the early waves. We start in
+  // a corner (two direct portals) and grow along the grid.
   const intersections = [
-    { id: 0, x: 640, y: 262 },
-    { id: 1, x: 300, y: 262 },
-    { id: 2, x: 980, y: 262 },
-    { id: 3, x: 640, y: 498 },
-    { id: 4, x: 300, y: 498 },
+    { id: 0, x: 300, y: 262 },
+    { id: 1, x: 640, y: 262 },
+    { id: 2, x: 300, y: 498 },
+    { id: 3, x: 980, y: 262 },
+    { id: 4, x: 640, y: 498 },
     { id: 5, x: 980, y: 498 }
   ];
-  // Portals: where cars enter and leave at the map edges.
+  // Portals: where cars enter and leave at the map edges. Each portal's
+  // neighbour is the nearest intersection on its road.
   const portals = [
-    { id: 6,  x: 300,  y: hud,  dir: 'S', neighbour: 1 },
-    { id: 7,  x: 640,  y: hud,  dir: 'S', neighbour: 0 },
-    { id: 8,  x: 980,  y: hud,  dir: 'S', neighbour: 2 },
-    { id: 9,  x: 300,  y: 720,  dir: 'N', neighbour: 4 },
-    { id: 10, x: 640,  y: 720,  dir: 'N', neighbour: 3 },
+    { id: 6,  x: 300,  y: hud,  dir: 'S', neighbour: 0 },
+    { id: 7,  x: 640,  y: hud,  dir: 'S', neighbour: 1 },
+    { id: 8,  x: 980,  y: hud,  dir: 'S', neighbour: 3 },
+    { id: 9,  x: 300,  y: 720,  dir: 'N', neighbour: 2 },
+    { id: 10, x: 640,  y: 720,  dir: 'N', neighbour: 4 },
     { id: 11, x: 980,  y: 720,  dir: 'N', neighbour: 5 },
-    { id: 12, x: 0,    y: 262,  dir: 'E', neighbour: 1 },
-    { id: 13, x: 0,    y: 498,  dir: 'E', neighbour: 4 },
-    { id: 14, x: 1280, y: 262,  dir: 'W', neighbour: 2 },
+    { id: 12, x: 0,    y: 262,  dir: 'E', neighbour: 0 },
+    { id: 13, x: 0,    y: 498,  dir: 'E', neighbour: 2 },
+    { id: 14, x: 1280, y: 262,  dir: 'W', neighbour: 3 },
     { id: 15, x: 1280, y: 498,  dir: 'W', neighbour: 5 }
   ];
   // Undirected adjacency: [a, b] pairs of node ids.
   const edges = [
-    [6, 1], [1, 4], [4, 9],
-    [7, 0], [0, 3], [3, 10],
-    [8, 2], [2, 5], [5, 11],
-    [12, 1], [1, 0], [0, 2], [2, 14],
-    [13, 4], [4, 3], [3, 5], [5, 15]
+    [6, 0], [0, 2], [2, 9],
+    [7, 1], [1, 4], [4, 10],
+    [8, 3], [3, 5], [5, 11],
+    [12, 0], [0, 1], [1, 3], [3, 14],
+    [13, 2], [2, 4], [4, 5], [5, 15]
   ];
   const nodes = [];
   intersections.forEach(function (n) { nodes[n.id] = { id: n.id, x: n.x, y: n.y, kind: 'cross' }; });
@@ -309,8 +313,8 @@ function buildPath(city, route, roundabouts) {
   const length = cum[cum.length - 1];
 
   // Resolve stop-line distances: nearest path point to the node centre,
-  // pulled back by the stop offset.
-  const stopOffset = NG_CONFIG.roadWidth / 2 + 12;
+  // pulled back past the crosswalk so queues never block pedestrians.
+  const stopOffset = NG_CONFIG.roadWidth / 2 + 20;
   stops.forEach(function (st) {
     const node = nodes[st.node];
     let best = 0;
@@ -354,6 +358,20 @@ function pathPointAt(path, s) {
   const x = pts[lo].x + (pts[hi].x - pts[lo].x) * t;
   const y = pts[lo].y + (pts[hi].y - pts[lo].y) * t;
   return { x: x, y: y, angle: Math.atan2(pts[hi].y - pts[lo].y, pts[hi].x - pts[lo].x) };
+}
+
+// Index of the dense path point at or just before distance s.
+function pathIndexAt(path, s) {
+  const cum = path.cum;
+  if (s <= 0) return 0;
+  if (s >= path.length) return cum.length - 1;
+  let lo = 0;
+  let hi = cum.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (cum[mid] <= s) lo = mid; else hi = mid;
+  }
+  return lo;
 }
 
 // Crosswalk rectangles for one intersection (one per arm).

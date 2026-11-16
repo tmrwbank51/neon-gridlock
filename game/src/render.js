@@ -106,17 +106,26 @@ function buildStaticLayer(world) {
       rr(g, block.x + 6, block.y + 6, block.w - 12, block.h - 12, 8);
       g.fill();
       if (block.sign) {
+        // A fountain: filled basin, neon rim, lit centre jet.
+        g.fillStyle = '#26264a';
+        g.beginPath();
+        g.arc(block.sign.x, block.sign.y, block.sign.r, 0, Math.PI * 2);
+        g.fill();
         g.strokeStyle = block.sign.color;
-        g.lineWidth = 3;
+        g.lineWidth = 2.5;
         g.globalAlpha = 0.8;
         g.beginPath();
         g.arc(block.sign.x, block.sign.y, block.sign.r, 0, Math.PI * 2);
         g.stroke();
-        g.globalAlpha = 0.25;
+        g.globalAlpha = 0.3;
         g.beginPath();
         g.arc(block.sign.x, block.sign.y, block.sign.r * 0.6, 0, Math.PI * 2);
         g.stroke();
         g.globalAlpha = 1;
+        g.fillStyle = block.sign.color;
+        g.beginPath();
+        g.arc(block.sign.x, block.sign.y, 4, 0, Math.PI * 2);
+        g.fill();
       }
     } else {
       block.buildings.forEach(function (b) {
@@ -210,9 +219,9 @@ function buildStaticLayer(world) {
       g.fill();
       g.globalAlpha = 1;
     }
-    // Stop lines: one per approach, on the right-hand side.
+    // Stop lines: one per approach, just outside the crosswalk.
     g.fillStyle = P.stopLine;
-    const so = hw + 2;
+    const so = hw + 16;
     g.fillRect(node.x + 3, node.y - so - 3, hw - 5, 3);   // north approach (southbound)
     g.fillRect(node.x - hw + 2, node.y + so, hw - 5, 3);  // south approach (northbound)
     g.fillRect(node.x + so, node.y - hw + 2, 3, hw - 5);  // east approach (westbound)
@@ -247,29 +256,29 @@ function drawLightHead(g, world, node, approach, lights, time) {
   const conflict = lightHasConflict(lights, approach);
   // Pole.
   g.fillStyle = '#0c0c16';
-  g.fillRect(pos.x - 2, pos.y + 6, 4, 12);
+  g.fillRect(pos.x - 2, pos.y + 14, 4, 12);
   // Head.
   g.fillStyle = '#101018';
-  rr(g, pos.x - 7, pos.y - 12, 14, 26, 4);
+  rr(g, pos.x - 8, pos.y - 14, 16, 30, 4);
   g.fill();
   g.strokeStyle = 'rgba(255,255,255,0.18)';
   g.lineWidth = 1;
-  rr(g, pos.x - 7, pos.y - 12, 14, 26, 4);
+  rr(g, pos.x - 8, pos.y - 14, 16, 30, 4);
   g.stroke();
   const lamps = [
-    { dy: -6, color: NG_PALETTE.lampRed, on: state === 'red', sprite: world.sprites.glowRed },
-    { dy: 1, color: NG_PALETTE.lampAmber, on: state === 'amber', sprite: world.sprites.glowAmber },
+    { dy: -8, color: NG_PALETTE.lampRed, on: state === 'red', sprite: world.sprites.glowRed },
+    { dy: 0, color: NG_PALETTE.lampAmber, on: state === 'amber', sprite: world.sprites.glowAmber },
     { dy: 8, color: NG_PALETTE.lampGreen, on: state === 'green', sprite: world.sprites.glowGreen }
   ];
   lamps.forEach(function (lamp) {
     if (lamp.on) {
-      g.globalAlpha = 0.55 + 0.1 * Math.sin(time * 4);
-      g.drawImage(lamp.sprite, pos.x - 20, lamp.dy + pos.y - 20, 40, 40);
+      g.globalAlpha = 0.65 + 0.1 * Math.sin(time * 4);
+      g.drawImage(lamp.sprite, pos.x - 23, lamp.dy + pos.y - 23, 46, 46);
       g.globalAlpha = 1;
     }
     g.fillStyle = lamp.on ? lamp.color : '#2c2c3e';
     g.beginPath();
-    g.arc(pos.x, pos.y + lamp.dy, 3.6, 0, Math.PI * 2);
+    g.arc(pos.x, pos.y + lamp.dy, 4.2, 0, Math.PI * 2);
     g.fill();
   });
   if (conflict) {
@@ -302,33 +311,43 @@ function drawWalkSignal(g, world, node, arm, lights) {
   else if (arm === 'E') { x = node.x + NG_CONFIG.roadWidth / 2 + 22; y = node.y - NG_CONFIG.roadWidth / 2 - 8; }
   else { x = node.x - NG_CONFIG.roadWidth / 2 - 22; y = node.y + NG_CONFIG.roadWidth / 2 + 8; }
   g.fillStyle = '#101018';
-  rr(g, x - 6, y - 6, 12, 12, 3);
+  rr(g, x - 7, y - 7, 14, 14, 3);
   g.fill();
   g.strokeStyle = on ? '#2ee66b' : '#ff3b30';
   g.lineWidth = 1.5;
-  rr(g, x - 6, y - 6, 12, 12, 3);
+  rr(g, x - 7, y - 7, 14, 14, 3);
   g.stroke();
-  // Tiny walking / standing figure.
-  g.strokeStyle = on ? '#2ee66b' : '#ff3b30';
-  g.lineWidth = 1.6;
-  g.beginPath();
-  g.arc(x, y - 2.5, 1.6, 0, Math.PI * 2);
-  g.stroke();
-  g.beginPath();
   if (on) {
-    g.moveTo(x, y - 1);
-    g.lineTo(x, y + 2);
-    g.moveTo(x, y + 2);
-    g.lineTo(x - 2, y + 4.5);
-    g.moveTo(x, y + 2);
-    g.lineTo(x + 2.5, y + 4);
+    // Walking figure: head, body, striding legs.
+    g.strokeStyle = '#2ee66b';
+    g.lineWidth = 1.6;
+    g.beginPath();
+    g.arc(x, y - 3.5, 1.8, 0, Math.PI * 2);
+    g.stroke();
+    g.beginPath();
+    g.moveTo(x, y - 1.5);
+    g.lineTo(x, y + 1.5);
+    g.moveTo(x, y + 1.5);
+    g.lineTo(x - 2.5, y + 5);
+    g.moveTo(x, y + 1.5);
+    g.lineTo(x + 2.5, y + 4.5);
+    g.moveTo(x, y);
+    g.lineTo(x - 2.5, y + 2);
+    g.stroke();
   } else {
-    g.moveTo(x, y - 1);
-    g.lineTo(x, y + 4.5);
-    g.moveTo(x - 2, y + 1);
-    g.lineTo(x + 2, y + 1);
+    // Standing figure: head, straight body, arms out (do not walk).
+    g.strokeStyle = '#ff3b30';
+    g.lineWidth = 1.6;
+    g.beginPath();
+    g.arc(x, y - 3.5, 1.8, 0, Math.PI * 2);
+    g.stroke();
+    g.beginPath();
+    g.moveTo(x, y - 1.5);
+    g.lineTo(x, y + 5);
+    g.moveTo(x - 3, y + 0.5);
+    g.lineTo(x + 3, y + 0.5);
+    g.stroke();
   }
-  g.stroke();
 }
 
 function drawCar(g, world, car, time) {
@@ -502,14 +521,21 @@ function drawWorld(g, world, time) {
     }
   });
 
-  // Selected-intersection ring + number badges.
+  // Selected-intersection marker: corner brackets around the box.
   if (world.selected >= 0 && world.phase === 'playing') {
     const node = world.city.intersections[world.selected];
-    g.strokeStyle = 'rgba(55,226,255,' + (0.6 + 0.4 * Math.sin(time * 5)) + ')';
+    const a = 0.6 + 0.4 * Math.sin(time * 5);
+    g.strokeStyle = 'rgba(55,226,255,' + a + ')';
     g.lineWidth = 2.5;
-    g.beginPath();
-    g.arc(node.x, node.y, 46, 0, Math.PI * 2);
-    g.stroke();
+    const r = 42, len = 13;
+    [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(function (c) {
+      const cx = node.x + c[0] * r, cy = node.y + c[1] * r;
+      g.beginPath();
+      g.moveTo(cx - c[0] * len, cy);
+      g.lineTo(cx, cy);
+      g.lineTo(cx, cy - c[1] * len);
+      g.stroke();
+    });
   }
   for (let i = 0; i < world.director.activeCount; i++) {
     const node = world.city.intersections[i];

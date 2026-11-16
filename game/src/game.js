@@ -59,6 +59,7 @@ function createWorld(seed) {
     crashes: 0,
     nearMisses: 0,
     emergenciesSaved: 0,
+    lifeLosses: { crash: 0, emergency: 0, jam: 0, ped: 0 },
     jam: 0,
     selected: 0,
     speed: 1,
@@ -73,6 +74,7 @@ function createWorld(seed) {
     autoplay: false,
     autoplayTimer: 0,
     lastFlip: [0, 0, 0, 0, 0, 0],
+    pendingFlip: [null, null, null, null, null, null],
     lastHonk: 0,
     sprites: makeSprites(),
     staticLayer: null,
@@ -117,6 +119,10 @@ function restartRun(world) {
 function loseLife(world, reason, x, y) {
   if (world.attract) return;
   world.lives -= 1;
+  if (reason.indexOf('CRASH') === 0) world.lifeLosses.crash++;
+  else if (reason.indexOf('EMERGENCY') === 0) world.lifeLosses.emergency++;
+  else if (reason.indexOf('GRIDLOCK') === 0) world.lifeLosses.jam++;
+  else world.lifeLosses.ped++;
   world.combo = 1;
   addPopup(world.particles, x, y, reason, '#ff4d6d', true);
   addShake(world.particles, 9);
@@ -164,6 +170,26 @@ function awardExit(world, car) {
 
 // ---- collisions ---------------------------------------------------------
 
+// Oriented bounding-box overlap (separating axis test) between two cars.
+// A circular distance check falsely fires for cars on adjacent or
+// converging paths that pass within 19px without touching; rectangles
+// only overlap on a genuine crossing contact.
+function carRectsOverlap(a, b) {
+  const aHL = a.arch.len * 0.45, aHW = a.arch.wid * 0.45;
+  const bHL = b.arch.len * 0.45, bHW = b.arch.wid * 0.45;
+  const ax = Math.cos(a.angle), ay = Math.sin(a.angle);
+  const bx = Math.cos(b.angle), by = Math.sin(b.angle);
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const axes = [[ax, ay], [-ay, ax], [bx, by], [-by, bx]];
+  for (let i = 0; i < 4; i++) {
+    const ux = axes[i][0], uy = axes[i][1];
+    const ra = aHL * Math.abs(ax * ux + ay * uy) + aHW * Math.abs(-ay * ux + ax * uy);
+    const rb = bHL * Math.abs(bx * ux + by * uy) + bHW * Math.abs(-by * ux + bx * uy);
+    if (Math.abs(dx * ux + dy * uy) > ra + rb) return false;
+  }
+  return true;
+}
+
 function detectCollisions(world) {
   const cars = world.cars;
   // Car vs car inside intersection boxes.
@@ -176,7 +202,7 @@ function detectCollisions(world) {
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       const d2 = dx * dx + dy * dy;
-      if (d2 > 30 * 30) continue;
+      if (d2 > 40 * 40) continue;
       // Both inside the same non-roundabout intersection box?
       let sharedNode = -1;
       for (let n = 0; n < 6; n++) {
@@ -190,7 +216,7 @@ function detectCollisions(world) {
       const dist = Math.sqrt(d2);
       let angleDiff = Math.abs(a.angle - b.angle) % (Math.PI * 2);
       if (angleDiff > Math.PI) angleDiff = Math.PI * 2 - angleDiff;
-      if (dist < 19 && angleDiff > 0.5) {
+      if (angleDiff > 0.5 && carRectsOverlap(a, b)) {
         crashCars(world, a, b);
         return; // re-scan next tick; the pair is wrecked now
       }
@@ -199,10 +225,12 @@ function detectCollisions(world) {
         a.nearMissTimer = 3;
         b.nearMissTimer = 3;
         world.nearMisses++;
-        const bonus = 30;
-        world.score += Math.round(bonus * world.combo);
-        addPopup(world.particles, (a.x + b.x) / 2, (a.y + b.y) / 2 - 14, 'NEAR MISS +' + Math.round(bonus * world.combo), '#ffd166', true);
-        NG_Audio.nearMiss();
+        if (!world.attract) {
+          const bonus = 30;
+          world.score += Math.round(bonus * world.combo);
+          addPopup(world.particles, (a.x + b.x) / 2, (a.y + b.y) / 2 - 14, 'NEAR MISS +' + Math.round(bonus * world.combo), '#ffd166', true);
+          NG_Audio.nearMiss();
+        }
       }
     }
   }
@@ -314,7 +342,6 @@ function autoplayStep(world) {
   for (let n = 0; n < d.activeCount; n++) {
     const lights = world.lights[n];
     if (lights.auto || lights.roundabout) continue;
-    if (world.time - world.lastFlip[n] < 2.5) continue;
     const q = world.queues[n] || { N: 0, E: 0, S: 0, W: 0 };
     const nsQueue = q.N + q.S;
     const ewQueue = q.E + q.W;
@@ -330,13 +357,68 @@ function autoplayStep(world) {
       }
     }
     const wantNs = forceAxis ? forceAxis === 'ns' : nsQueue >= ewQueue;
-    const nsGreen = lightStateAt(lights, 'N') === 'green';
-    if (wantNs === nsGreen && Math.abs(nsQueue - ewQueue) < 3 && !forceAxis) continue;
-    lightSet(lights, 'N', wantNs ? 'green' : 'red');
-    lightSet(lights, 'S', wantNs ? 'green' : 'red');
-    lightSet(lights, 'E', wantNs ? 'red' : 'green');
-    lightSet(lights, 'W', wantNs ? 'red' : 'green');
-    world.lastFlip[n] = world.time;
+    const wantAxis = wantNs ? 'ns' : 'ew';
+    const nsGreen = lightStateAt(lights, 'N') === 'green' || lightStateAt(lights, 'S') === 'green';
+    const ewGreen = lightStateAt(lights, 'E') === 'green' || lightStateAt(lights, 'W') === 'green';
+    const currentAxis = nsGreen ? 'ns' : (ewGreen ? 'ew' : null);
+
+    // Finish a pending flip once the old axis is fully red AND the box
+    // is empty: a long vehicle that entered on amber needs more than
+    // the amber second to clear, and greening the cross axis early
+    // invites a collision with it.
+    const pending = world.pendingFlip[n];
+    if (pending) {
+      const oldRed = pending === 'ns'
+        ? lightStateAt(lights, 'E') === 'red' && lightStateAt(lights, 'W') === 'red'
+        : lightStateAt(lights, 'N') === 'red' && lightStateAt(lights, 'S') === 'red';
+      let boxEmpty = true;
+      if (oldRed) {
+        const node = world.city.intersections[n];
+        for (let i = 0; i < world.cars.length; i++) {
+          const car = world.cars[i];
+          if (car.state !== 'driving') continue;
+          const dx = car.x - node.x;
+          const dy = car.y - node.y;
+          if (dx * dx + dy * dy < 50 * 50) { boxEmpty = false; break; }
+        }
+      }
+      if (oldRed && boxEmpty) {
+        const ok1 = lightToggle(lights, pending === 'ns' ? 'N' : 'E', world.mods);
+        const ok2 = lightToggle(lights, pending === 'ns' ? 'S' : 'W', world.mods);
+        if (ok1 && ok2) {
+          world.pendingFlip[n] = null;
+          world.lastFlip[n] = world.time;
+        }
+      }
+      continue;
+    }
+    if (currentAxis === wantAxis) continue;
+    // Hysteresis must never starve an axis: a green older than 7s with
+    // any queue on the other side always flips.
+    const stale = world.time - world.lastFlip[n] > 7 && (nsQueue + ewQueue) > 0 &&
+      ((wantAxis === 'ns' && nsQueue > 0) || (wantAxis === 'ew' && ewQueue > 0));
+    if (Math.abs(nsQueue - ewQueue) < 3 && !forceAxis && !stale) continue;
+    if (world.time - world.lastFlip[n] < 2.5) continue;
+    // Do not start a flip while the box is occupied.
+    const node = world.city.intersections[n];
+    let occupied = false;
+    for (let i = 0; i < world.cars.length; i++) {
+      const car = world.cars[i];
+      if (car.state !== 'driving') continue;
+      const dx = car.x - node.x;
+      const dy = car.y - node.y;
+      if (dx * dx + dy * dy < 40 * 40) { occupied = true; break; }
+    }
+    if (occupied) continue;
+    // Phase 1: send the green axis to amber; phase 2 completes the flip.
+    // Only arm the pending flip if both toggles actually fired.
+    let ok = true;
+    if (currentAxis === 'ns') {
+      ok = lightToggle(lights, 'N', world.mods) && lightToggle(lights, 'S', world.mods);
+    } else if (currentAxis === 'ew') {
+      ok = lightToggle(lights, 'E', world.mods) && lightToggle(lights, 'W', world.mods);
+    }
+    if (ok) world.pendingFlip[n] = wantAxis;
   }
 }
 
@@ -403,8 +485,8 @@ function updateWorld(world, dt) {
     const d = world.director;
     d.spawnTimer -= dt;
     if (d.spawnTimer <= 0) {
-      d.spawnTimer = 1.25 * world.rng.range(0.7, 1.3);
-      if (world.cars.length < 34) spawnCar(world, null);
+      d.spawnTimer = 0.95 * world.rng.range(0.7, 1.3);
+      if (world.cars.length < 40) spawnCar(world, null);
     }
     d.pedTimer -= dt;
     if (d.pedTimer <= 0) {
@@ -500,9 +582,9 @@ function setScene(world, name) {
     setupAttract(world);
   } else if (name === 'play') {
     resetRun(world, world.seed);
-    startWave(world, 1);
-    world.director.waveTime = 18;
-    fastForward(world, 16, true);
+    startWave(world, 2);
+    world.director.waveTime = 20;
+    fastForward(world, 24, true);
     world.autoplay = false;
   } else if (name === 'rush') {
     resetRun(world, world.seed);
@@ -565,6 +647,7 @@ function runSweep(seeds, opts) {
       waves: world.director.waveIndex + 1,
       throughput: world.throughput,
       crashes: world.crashes,
+      lifeLosses: world.lifeLosses,
       ticks: ticks
     });
   }
